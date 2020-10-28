@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  This template creates two Amazon EC2 instances, and an Application Load Balancer.
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 Key Pair
+    Type: AWS::EC2::KeyPair::KeyName
+
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: Choose which VPC that the Application Load Balancer should be deployed to
+
+  Subnets:
+    Description: Choose minimum of 2 subnets (2 different availability zones) that Application Load Balancer should be deployed to
+    Type: List<AWS::EC2::Subnet::Id>
+
+  webAppGitHubPath:
+    Description: Please enter github url to the arsefuckery
+    Type: String
+    Default: https://telxl.call-control.com/download/tictactoedeploy.zip
+
+
+
+Mappings:
+  RegionMap:
+    us-east-1: #N. Virginia
+      "64": ami-0de53d8956e8dcf80
+    us-east-2: #Ohio
+      "64": ami-02bcbb802e03574ba
+    us-west-1: #N. California
+      "64": ami-0019ef04ac50be30f
+    us-west-2: #Oregon
+      "64": ami-061392db613a6357b
+    eu-west-2: #LAANDON
+      "64": ami-0a669382ea0feb73a
+
+Resources:
+  EC2Instance1:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallApp:
+            - "installNodeConfig"
+          RunApp:
+            - "runAppConfig"
+        installNodeConfig:
+          packages:
+            yum:
+              nodejs: []
+          sources:
+              /home/ec2-user: !Ref webAppGitHubPath
+          commands:
+            0-NPMInstall:
+              command: 'npm install'
+              cwd: '/home/ec2-user/'
+        runAppConfig:
+          commands:
+            1-RunWebserver:
+              command: 'ls > startoutput.txt'
+              cwd: '/home/ec2-user/'
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !FindInMap
+        - RegionMap
+        - !Ref 'AWS::Region'
+        - "64"
+      Tags:
+        - Key: Name
+          Value: Webserver1
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref MySecurityGroup
+      UserData:
+        'Fn::Base64':
+          !Sub |
+            Content-Type: multipart/mixed; boundary="//"
+            MIME-Version: 1.0
+
+            --//
+            Content-Type: text/cloud-config; charset="us-ascii"
+            MIME-Version: 1.0
+            Content-Transfer-Encoding: 7bit
+            Content-Disposition: attachment; filename="cloud-config.txt"
+
+            #cloud-config
+            cloud_final_modules:
+            - [scripts-user, always]
+
+            --//
+            Content-Type: text/x-shellscript; charset="us-ascii"
+            MIME-Version: 1.0
+            Content-Transfer-Encoding: 7bit
+            Content-Disposition: attachment; filename="userdata.txt"
+
+            #!/bin/bash -xe
+              #Ensure AWS CFN Bootstrap is the latest
+              yum install -y aws-cfn-bootstrap
+              # Download Node.js from Official RPM
+              curl --silent --location https://rpm.nodesource.com/setup_14.x | bash -
+              
+              # Install the files and packages from the metadata
+              /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --configsets InstallApp --resource EC2Instance1 --region ${AWS::Region}
+              # Signal for this EC2 Instance the app and packages have been installed
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource EC2Instance1 --region ${AWS::Region}
+              cd /home/ec2-user/
+              npm install -g serve
+              npm run build
+              serve -s build -l 3000
+            --//
+    CreationPolicy: #If a signal is not received after 10 minutes, CloudFormation immediately stops the stack creation
+      ResourceSignal:
+        Timeout: PT10M
+  EC2Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !FindInMap
+        - RegionMap
+        - !Ref 'AWS::Region'
+        - "64"
+      Tags:
+        - Key: Name
+          Value: Webserver2
+      KeyName: !Ref KeyName
+      SecurityGroups:
+        - !Ref MySecurityGroup
+      UserData:
+        'Fn::Base64':
+          !Sub |
+            Content-Type: multipart/mixed; boundary="//"
+            MIME-Version: 1.0
+
+            --//
+            Content-Type: text/cloud-config; charset="us-ascii"
+            MIME-Version: 1.0
+            Content-Transfer-Encoding: 7bit
+            Content-Disposition: attachment; filename="cloud-config.txt"
+
+            #cloud-config
+            cloud_final_modules:
+            - [scripts-user, always]
+
+            --//
+            Content-Type: text/x-shellscript; charset="us-ascii"
+            MIME-Version: 1.0
+            Content-Transfer-Encoding: 7bit
+            Content-Disposition: attachment; filename="userdata.txt"
+
+            #!/bin/bash -xe
+              #Ensure AWS CFN Bootstrap is the latest
+              yum install -y aws-cfn-bootstrap
+              # Download Node.js from Official RPM
+              curl --silent --location https://rpm.nodesource.com/setup_14.x | bash -
+              
+              # Install the files and packages from the metadata
+              /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --configsets InstallApp --resource EC2Instance1  --region ${AWS::Region}
+              # Signal for this EC2 Instance the app and packages have been installed
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource EC2Instance2 --region ${AWS::Region}
+              cd /home/ec2-user/
+              npm install -g serve
+              npm run build
+              serve -s build -l 3000
+            --//
+    CreationPolicy: #If a signal is not received after 10 minutes, CloudFormation immediately stops the stack creation
+      ResourceSignal:
+        Timeout: PT10M
+  
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access via port 22 and Enable Http via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0 # Use Testing only - open to all ip addresses
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '3000'
+          CidrIp: 0.0.0.0/0 
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: 'MyLoadBalancer1'
+      Subnets: !Ref Subnets
+      SecurityGroups: [!GetAtt MySecurityGroup.GroupId]
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: HTTP
+      Port: 80
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      Name: MyTargets
+      Targets: 
+        - Id: 
+            Ref: EC2Instance1
+          Port: 3000
+        - Id: 
+            Ref: EC2Instance2
+          Port: 3000
+      VpcId: !Ref VPC    
+
+Outputs:
+  SecurityGroup:
+    Description: Security Group
+    Value: !Ref MySecurityGroup
+
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !GetAtt MySecurityGroup.GroupId 
+
+  LoadBalancer:
+    Description: A reference to the Application Load Balancer
+    Value: !Ref ApplicationLoadBalancer
+
+  LoadBalancerUrl:
+    Description: The URL of the ALB
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  WebServer1Dns:
+    Description: EC2 Instance 1
+    Value: !GetAtt
+      - EC2Instance1
+      - PublicDnsName
+  
+  WebServer2Dns:
+    Description: EC2 Instance 2
+    Value: !GetAtt
+      - EC2Instance2
+      - PublicDnsName

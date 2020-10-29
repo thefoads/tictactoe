@@ -17,7 +17,7 @@ Parameters:
   webAppGitHubPath:
     Description: Please enter github url to the arsefuckery
     Type: String
-    Default: https://telxl.call-control.com/download/tictactoedeploy.zip
+    Default: https://github.com/thefoads/tictactoe/zipball/master
 
 
 
